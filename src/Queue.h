@@ -1,48 +1,62 @@
 #pragma once
-#include <queue>
-#include <mutex>
-#include <condition_variable>
+#include <vector>
+#include <atomic>
+#include <thread>
 #include "Message.h"
 
 class BoundedQueue {
 public:
-    BoundedQueue(size_t capacity) : capacity_(capacity), active_(true) {}
+    BoundedQueue(size_t capacity) : capacity_(capacity), active_(true), head_(0), tail_(0) {
+        queue_.resize(capacity_);
+    }
 
     bool push(const TickMessage& msg) {
-        std::unique_lock<std::mutex> lock(mutex_);
-        cond_full_.wait(lock, [this]() { return queue_.size() < capacity_ || !active_; });
-        if (!active_) return false;
-        
-        queue_.push(msg);
-        lock.unlock();
-        cond_empty_.notify_one();
-        return true;
+        while (active_.load(std::memory_order_acquire)) {
+            while (lock_.test_and_set(std::memory_order_acquire)) {
+                std::this_thread::yield();
+            }
+            if (tail_ - head_ < capacity_) {
+                queue_[tail_ % capacity_] = msg;
+                tail_++;
+                lock_.clear(std::memory_order_release);
+                return true;
+            }
+            lock_.clear(std::memory_order_release);
+            std::this_thread::yield();
+        }
+        return false;
     }
 
     bool pop(TickMessage& msg) {
-        std::unique_lock<std::mutex> lock(mutex_);
-        cond_empty_.wait(lock, [this]() { return !queue_.empty() || !active_; });
-        if (!active_ && queue_.empty()) return false;
-        
-        msg = queue_.front();
-        queue_.pop();
-        lock.unlock();
-        cond_full_.notify_one();
-        return true;
+        while (active_.load(std::memory_order_acquire) || head_ < tail_) {
+            while (lock_.test_and_set(std::memory_order_acquire)) {
+                std::this_thread::yield();
+            }
+            if (head_ < tail_) {
+                msg = queue_[head_ % capacity_];
+                head_++;
+                lock_.clear(std::memory_order_release);
+                return true;
+            }
+            lock_.clear(std::memory_order_release);
+            if (!active_.load(std::memory_order_acquire)) return false;
+            std::this_thread::yield();
+        }
+        return false;
     }
 
     void shutdown() {
-        std::lock_guard<std::mutex> lock(mutex_);
-        active_ = false;
-        cond_empty_.notify_all();
-        cond_full_.notify_all();
+        active_.store(false, std::memory_order_release);
     }
 
 private:
-    std::queue<TickMessage> queue_;
+    std::vector<TickMessage> queue_;
     size_t capacity_;
-    bool active_;
-    std::mutex mutex_;
-    std::condition_variable cond_empty_;
-    std::condition_variable cond_full_;
+    std::atomic<bool> active_;
+    
+    // Cache line padding to prevent false sharing
+    alignas(64) std::atomic_flag lock_ = ATOMIC_FLAG_INIT;
+    alignas(64) size_t head_;
+    alignas(64) size_t tail_;
 };
+

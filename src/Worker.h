@@ -1,26 +1,35 @@
 #pragma once
 #include <unordered_map>
-#include <mutex>
+#include <atomic>
+#include <thread>
 #include "Queue.h"
 
 class SnapshotStore {
 public:
     void update(const TickMessage& msg) {
-        std::lock_guard<std::mutex> lock(mutex_);
+        while (lock_.test_and_set(std::memory_order_acquire)) {
+            std::this_thread::yield();
+        }
         snapshots_[msg.symbol] = msg;
+        lock_.clear(std::memory_order_release);
     }
 
     std::unordered_map<std::string, TickMessage> getSnapshots() {
-        std::lock_guard<std::mutex> lock(mutex_);
-        return snapshots_;
+        while (lock_.test_and_set(std::memory_order_acquire)) {
+            std::this_thread::yield();
+        }
+        auto copy = snapshots_;
+        lock_.clear(std::memory_order_release);
+        return copy;
     }
 
 private:
     std::unordered_map<std::string, TickMessage> snapshots_;
-    std::mutex mutex_;
+    alignas(64) std::atomic_flag lock_ = ATOMIC_FLAG_INIT;
 };
 
 class Worker {
+
 public:
     Worker(BoundedQueue& queue, SnapshotStore& store) 
         : queue_(queue), store_(store) {}
