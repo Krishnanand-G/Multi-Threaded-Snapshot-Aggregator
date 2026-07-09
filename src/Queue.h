@@ -1,48 +1,41 @@
 #pragma once
 #include <vector>
 #include <atomic>
-#include <thread>
 #include "Message.h"
 
+// Single-Producer Single-Consumer Lock-Free Queue
 class BoundedQueue {
 public:
-    BoundedQueue(size_t capacity) : capacity_(capacity), active_(true), head_(0), tail_(0) {
+    BoundedQueue(size_t capacity) : capacity_(capacity), active_(true) {
         queue_.resize(capacity_);
+        head_.store(0, std::memory_order_relaxed);
+        tail_.store(0, std::memory_order_relaxed);
     }
 
     bool push(const TickMessage& msg) {
-        while (active_.load(std::memory_order_acquire)) {
-            while (lock_.test_and_set(std::memory_order_acquire)) {
-                std::this_thread::yield();
-            }
-            if (tail_ - head_ < capacity_) {
-                queue_[tail_ % capacity_] = msg;
-                tail_++;
-                lock_.clear(std::memory_order_release);
-                return true;
-            }
-            lock_.clear(std::memory_order_release);
-            std::this_thread::yield();
+        if (!active_.load(std::memory_order_acquire)) return false;
+        size_t current_tail = tail_.load(std::memory_order_relaxed);
+        size_t next_tail = (current_tail + 1) % capacity_;
+        
+        if (next_tail == head_.load(std::memory_order_acquire)) {
+            return false; // Queue full
         }
-        return false;
+        
+        queue_[current_tail] = msg;
+        tail_.store(next_tail, std::memory_order_release);
+        return true;
     }
 
     bool pop(TickMessage& msg) {
-        while (active_.load(std::memory_order_acquire) || head_ < tail_) {
-            while (lock_.test_and_set(std::memory_order_acquire)) {
-                std::this_thread::yield();
-            }
-            if (head_ < tail_) {
-                msg = queue_[head_ % capacity_];
-                head_++;
-                lock_.clear(std::memory_order_release);
-                return true;
-            }
-            lock_.clear(std::memory_order_release);
+        size_t current_head = head_.load(std::memory_order_relaxed);
+        if (current_head == tail_.load(std::memory_order_acquire)) {
             if (!active_.load(std::memory_order_acquire)) return false;
-            std::this_thread::yield();
+            return false; // Queue empty
         }
-        return false;
+        
+        msg = queue_[current_head];
+        head_.store((current_head + 1) % capacity_, std::memory_order_release);
+        return true;
     }
 
     void shutdown() {
@@ -54,9 +47,8 @@ private:
     size_t capacity_;
     std::atomic<bool> active_;
     
-    // Cache line padding to prevent false sharing
-    alignas(64) std::atomic_flag lock_ = ATOMIC_FLAG_INIT;
-    alignas(64) size_t head_;
-    alignas(64) size_t tail_;
+    alignas(64) std::atomic<size_t> head_;
+    alignas(64) std::atomic<size_t> tail_;
 };
+
 
