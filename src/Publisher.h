@@ -5,6 +5,7 @@
 #include <vector>
 #include <algorithm>
 #include "Worker.h"
+#include "ThreadCompat.h"
 
 class SnapshotPublisher {
 public:
@@ -23,7 +24,7 @@ public:
             // Publish snapshot (simulated)
             // std::cout << "Published " << snaps.size() << " symbols" << std::endl;
 
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            compat::this_thread::sleep_for(std::chrono::milliseconds(100));
         }
     }
 

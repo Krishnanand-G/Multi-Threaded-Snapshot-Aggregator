@@ -6,6 +6,7 @@
 #include "Queue.h"
 #include "Worker.h"
 #include "Publisher.h"
+#include "ThreadCompat.h"
 
 void simulateUdpReader(std::vector<std::unique_ptr<BoundedQueue>>& queues, int ticksPerSecond, int durationSeconds) {
     int totalTicks = ticksPerSecond * durationSeconds;
@@ -18,7 +19,7 @@ void simulateUdpReader(std::vector<std::unique_ptr<BoundedQueue>>& queues, int t
         queues[q_idx]->push(msg);
         
         if (i % 100 == 0) {
-            std::this_thread::yield();
+            compat::this_thread::yield();
         }
     }
 }
@@ -32,7 +33,7 @@ int main() {
     
     SnapshotStore store;
     
-    std::vector<std::thread> workers;
+    std::vector<compat::thread> workers;
     for (int i = 0; i < numWorkers; ++i) {
         workers.emplace_back([&queues, &store, i]() {
             Worker w(*queues[i], store);
@@ -41,7 +42,7 @@ int main() {
     }
 
     SnapshotPublisher publisher(store);
-    std::thread pubThread([&publisher]() {
+    compat::thread pubThread([&publisher]() {
         publisher.run();
     });
 

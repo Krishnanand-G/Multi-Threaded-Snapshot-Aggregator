@@ -3,6 +3,7 @@
 #include <atomic>
 #include <thread>
 #include "Queue.h"
+#include "ThreadCompat.h"
 
 class SnapshotStore {
 public:
@@ -27,7 +28,7 @@ public:
             // Reader: wait if sequence is odd (writer is active)
             do {
                 seq1 = sequence_.load(std::memory_order_acquire);
-                if (seq1 & 1) std::this_thread::yield();
+                if (seq1 & 1) compat::this_thread::yield();
             } while (seq1 & 1);
             
             std::atomic_thread_fence(std::memory_order_acquire);
